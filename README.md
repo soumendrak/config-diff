@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/soumendrak/config-diff/main/logo.svg" alt="Config Diff" width="120" />
+  <img src="./logo.svg" alt="Config Diff" width="120" />
 </p>
 
 <h1 align="center">Config Diff + Validator</h1>
