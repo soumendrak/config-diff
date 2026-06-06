@@ -62,7 +62,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .diff-line.added { background: var(--diff-add); border-left-color: #2ecc71; }
 .diff-line.removed { background: var(--diff-del); border-left-color: #e74c3c; }
 .diff-line.modified { background: var(--diff-mod); border-left-color: #f39c12; }
+.diff-line.modified-word { background: var(--diff-mod); border-left-color: #f39c12; padding: 4px 12px; }
 .diff-prefix { color: var(--text-dim); margin-right: 8px; }
+.diff-word-removed { background: #e74c3c55; border-radius: 3px; padding: 0 2px; border-bottom: 2px solid #e74c3c; }
+.diff-word-added { background: #2ecc7155; border-radius: 3px; padding: 0 2px; border-bottom: 2px solid #2ecc71; }
+.diff-word-marker { display: inline-block; width: 14px; text-align: center; color: var(--text-dim); font-size: 11px; user-select: none; }
 .validation-msg { padding: 4px 0; display: flex; gap: 8px; align-items: baseline; }
 .validation-msg .icon { width: 16px; }
 .validation-msg.warn { color: #f39c12; }
@@ -302,6 +306,38 @@ function buildLCS(a, b) {
 
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
+// Word-level diff (LCS on whitespace tokens)
+function wordDiffWords(oldLine, newLine) {
+  const oldWords = oldLine.split(/(\s+)/);
+  const newWords = newLine.split(/(\s+)/);
+  const m = oldWords.length, n = newWords.length;
+  const dp = Array(m+1).fill(null).map(() => Array(n+1).fill(0));
+  for (let i = m-1; i >= 0; i--)
+    for (let j = n-1; j >= 0; j--)
+      dp[i][j] = oldWords[i] === newWords[j] ? 1 + dp[i+1][j+1] : Math.max(dp[i+1][j], dp[i][j+1]);
+  const lcs = [];
+  let i = 0, j = 0;
+  const oldStatus = Array(m).fill(false);
+  const newStatus = Array(n).fill(false);
+  while (i < m && j < n) {
+    if (oldWords[i] === newWords[j]) { lcs.push(oldWords[i]); oldStatus[i]=true; newStatus[j]=true; i++; j++; }
+    else if (dp[i+1][j] >= dp[i][j+1]) i++;
+    else j++;
+  }
+  return {
+    oldWords: oldWords.map((w, idx) => ({ word: w, matched: oldStatus[idx] })),
+    newWords: newWords.map((w, idx) => ({ word: w, matched: newStatus[idx] }))
+  };
+}
+
+function renderWordDiffLine(oldLine, newLine) {
+  const { oldWords, newWords } = wordDiffWords(oldLine, newLine);
+  const oldHtml = oldWords.map(w => w.matched ? esc(w.word) : `<span class="diff-word-removed">${esc(w.word)}</span>`).join('');
+  const newHtml = newWords.map(w => w.matched ? esc(w.word) : `<span class="diff-word-added">${esc(w.word)}</span>`).join('');
+  return `<div class="diff-line modified-word"><span class="diff-word-marker">−</span> ${oldHtml}</div>
+<div class="diff-line modified-word"><span class="diff-word-marker">+</span> ${newHtml}</div>`;
+}
+
 function compare() {
   const leftText = document.getElementById('leftEditor').value;
   const rightText = document.getElementById('rightEditor').value;
@@ -330,14 +366,32 @@ function compare() {
     diffDiv.innerHTML = '<div class="no-diff" style="color:#2ecc71">Files are identical — no differences found</div>';
   } else {
     const diff = computeDiff(leftText, rightText);
-    diffDiv.innerHTML = diff.map(d => {
+    let rendered = '';
+    for (let di = 0; di < diff.length; di++) {
+      const d = diff[di];
+      // Check if this is a removed line followed by an added line (modification pair)
+      if (d.type === 'removed' && di + 1 < diff.length && diff[di+1].type === 'added') {
+        const next = diff[di+1];
+        // Check if lines share common words (ratio test)
+        const oldWords = d.left.split(/\s+/).filter(Boolean);
+        const newWords = next.right.split(/\s+/).filter(Boolean);
+        const common = oldWords.filter(w => newWords.includes(w)).length;
+        const maxLen = Math.max(oldWords.length, newWords.length);
+        const similarityRatio = maxLen > 0 ? common / maxLen : 0;
+        if (similarityRatio > 0.2 || oldWords.length === newWords.length) {
+          rendered += renderWordDiffLine(d.left, next.right);
+          di++; // skip the next added line
+          continue;
+        }
+      }
       let cls = '', prefix = '';
       if (d.type === 'removed') { cls = 'removed'; prefix = '- '; }
       else if (d.type === 'added') { cls = 'added'; prefix = '+ '; }
       else { prefix = '  '; }
       const text = d.type === 'removed' ? d.left : d.right;
-      return `<div class="diff-line ${cls}"><span class="diff-prefix">${prefix}</span>${esc(text || '')}</div>`;
-    }).join('');
+      rendered += `<div class="diff-line ${cls}"><span class="diff-prefix">${prefix}</span>${esc(text || '')}</div>`;
+    }
+    diffDiv.innerHTML = rendered;
   }
   
   // Render validation
